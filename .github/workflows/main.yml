@@ -1,0 +1,40 @@
+name: Deploy Ubuntu 26.04 with Nginx
+
+on:
+  workflow_dispatch: 
+
+jobs:
+  launch-instance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Fetch Latest Ubuntu 26.04 AMI
+        id: get-ami
+        run: |
+          # Pulls the official, stable Canonical Ubuntu 26.04 x86_64 AMI pointer
+          AMI_ID=$(aws ssm get-parameters --names /aws/service/canonical/ubuntu/server/26.04/stable/current/amd64/hvm/ebs-gp3/ami-id --query "Parameters.Value" --output text)
+          echo "UBUNTU_AMI=$AMI_ID" >> $GITHUB_ENV
+          echo "Selected Ubuntu 26.04 AMI ID: $AMI_ID"
+
+      - name: Launch EC2 and Install Nginx
+        run: |
+          aws ec2 run-instances \
+            --image-id ${{ env.UBUNTU_AMI }} \
+            --instance-type t2.micro \
+            --key-name MyKeyPair \
+            --security-group-ids sg-0123456789abcdef0 \
+            --subnet-id subnet-0123456789abcdef0 \
+            --user-data '#!/bin/bash
+            apt-get update -y
+            apt-get install nginx -y
+            systemctl start nginx
+            systemctl enable nginx'
