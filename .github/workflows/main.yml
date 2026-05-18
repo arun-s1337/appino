@@ -51,7 +51,9 @@ jobs:
             apt-get update -y
             apt-get install nginx -y
             systemctl start nginx
-            systemctl enable nginx')
+            systemctl enable nginx
+            # Overwrite default Nginx page with Hello World text
+            echo "<h1>Hello World from Ubuntu 26.04!</h1>" > /var/www/html/index.html')
 
           # 2. Parse out the Instance ID manually using jq
           INSTANCE_ID=$(echo "$RAW_OUTPUT" | jq -r '.Instances[0].InstanceId')
