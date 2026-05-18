@@ -17,29 +17,45 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Create Security Group and Add Rules
+      - name: Create or Reuse Security Group and Add Rules
         id: create-sg
         run: |
           SG_NAME="github-actions-sg-${{ github.run_id }}"
-          SG_ID=$(aws ec2 create-security-group \
-            --group-name "$SG_NAME" \
-            --description "Created via GitHub Actions to allow all TCP" \
-            --vpc-id vpc-022a26196a0f835e1 \
-            --query 'GroupId' --output text)
+          VPC_ID="vpc-022a26196a0f835e1"
           
-          echo "Generated SG ID: $SG_ID"
-          echo "SG_ID=$SG_ID" >> $GITHUB_ENV
+          echo "Checking if Security Group '$SG_NAME' already exists..."
+          # Query AWS to see if this specific group name exists in your VPC
+          EXISTING_SG_ID=$(aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=$SG_NAME" "Name=vpc-id,Values=$VPC_ID" \
+            --query "SecurityGroups[0].GroupId" \
+            --output text)
 
-          aws ec2 authorize-security-group-ingress \
-            --group-id "$SG_ID" \
-            --protocol tcp \
-            --port 0-65535 \
-            --cidr 0.0.0.0/0
+          if [ "$EXISTING_SG_ID" != "None" ] && [ -n "$EXISTING_SG_ID" ]; then
+            echo "Security Group already exists! Reusing ID: $EXISTING_SG_ID"
+            SG_ID=$EXISTING_SG_ID
+          else
+            echo "Security Group does not exist. Creating a new one..."
+            SG_ID=$(aws ec2 create-security-group \
+              --group-name "$SG_NAME" \
+              --description "Created via GitHub Actions to allow all TCP" \
+              --vpc-id "$VPC_ID" \
+              --query 'GroupId' --output text)
+            
+            echo "Generated New SG ID: $SG_ID"
+            
+            # Authorize ports only for a newly created group to avoid duplicate rule warnings
+            aws ec2 authorize-security-group-ingress \
+              --group-id "$SG_ID" \
+              --protocol tcp \
+              --port 0-65535 \
+              --cidr 0.0.0.0/0
+          fi
+          
+          echo "SG_ID=$SG_ID" >> $GITHUB_ENV
 
       - name: Launch EC2 and Install Nginx
         id: ec2-run
         run: |
-          # 1. Run the command without filters so we can see error messages if it fails
           RAW_OUTPUT=$(aws ec2 run-instances \
             --image-id resolve:ssm:/aws/service/canonical/ubuntu/server/26.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
             --instance-type t2.micro \
@@ -52,13 +68,10 @@ jobs:
             apt-get install nginx -y
             systemctl start nginx
             systemctl enable nginx
-            # Overwrite default Nginx page with Hello World text
             echo "<h1>Hello World from Ubuntu 26.04!</h1>" > /var/www/html/index.html')
 
-          # 2. Parse out the Instance ID manually using jq
           INSTANCE_ID=$(echo "$RAW_OUTPUT" | jq -r '.Instances[0].InstanceId')
           
-          # 3. Fail explicitly if the ID is missing or broken
           if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "null" ]; then
             echo "❌ ERROR: AWS failed to create the instance! Raw response below:"
             echo "$RAW_OUTPUT"
