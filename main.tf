@@ -4,16 +4,24 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
-  # It is highly recommended to add an S3 backend here to store your state file!
 }
 
 provider "aws" {
-  region = "ap-south-1" # Set to Mumbai region to match your infrastructure
+  region = "ap-south-1" 
+}
+
+# Generates a short random string to guarantee unique IAM resource names
+resource "random_pet" "suffix" {
+  length = 1
 }
 
 # ==============================================================================
-# 1. AUTOMATIC NETWORK LOOKUPS (Pulls your existing infrastructure)
+# 1. NETWORK LOOKUPS (Fixed to capture multiple availability zones)
 # ==============================================================================
 
 # Finds your existing VPC based on its tag name
@@ -24,21 +32,22 @@ data "aws_vpc" "existing_vpc" {
   }
 }
 
-# Finds the public subnets inside that specific VPC
+# Dynamically grabs all public subnets inside your VPC to satisfy the 2-AZ requirement
 data "aws_subnets" "public_subnets" {
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.existing_vpc.id]
   }
 
+  # This looks for any subnet with "Public" in its Name tag or properties
   filter {
     name   = "tag:Name"
-    values = ["*PublicSubnet*"] # Matches PublicSubnet1, PublicSubnet2, etc.
+    values = ["*Public*", "*public*"] 
   }
 }
 
 # ==============================================================================
-# 2. IAM ROLES & LOGGING (Fixed Unique Names)
+# 2. IAM ROLES & LOGGING (Now dynamically named with a random suffix)
 # ==============================================================================
 
 resource "aws_cloudwatch_log_group" "ecs_log_group" {
@@ -47,7 +56,8 @@ resource "aws_cloudwatch_log_group" "ecs_log_group" {
 }
 
 resource "aws_iam_role" "ecs_execution_role" {
-  name = "ecsTaskExecutionRole-terraform"
+  # Combines your name with a random string (e.g., ecsTaskExecutionRole-terraform-wolf)
+  name = "ecsTaskExecutionRole-terraform-${random_pet.suffix.id}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -109,7 +119,7 @@ resource "aws_ecs_task_definition" "arunconty_task" {
 
 # Security Group for the ALB (Public access on port 80)
 resource "aws_security_group" "alb_sg" {
-  name        = "arunconty-alb-sg"
+  name        = "arunconty-alb-sg-${random_pet.suffix.id}"
   description = "Allow public HTTP traffic"
   vpc_id      = data.aws_vpc.existing_vpc.id
 
