@@ -1,16 +1,53 @@
-provider "aws" {
-  region = "us-east-1"
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+  # It is highly recommended to add an S3 backend here to store your state file!
 }
 
-# --- EXISTING CODE FIXES ---
+provider "aws" {
+  region = "ap-south-1" # Set to Mumbai region to match your infrastructure
+}
+
+# ==============================================================================
+# 1. AUTOMATIC NETWORK LOOKUPS (Pulls your existing infrastructure)
+# ==============================================================================
+
+# Finds your existing VPC based on its tag name
+data "aws_vpc" "existing_vpc" {
+  filter {
+    name   = "tag:Name"
+    values = ["CodePipelineStarterTemplate-DeployToECSFargate-1jJEBszQ/SimpleDockerEcsCluster-0262a13086f3/Vpc"]
+  }
+}
+
+# Finds the public subnets inside that specific VPC
+data "aws_subnets" "public_subnets" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.existing_vpc.id]
+  }
+
+  filter {
+    name   = "tag:Name"
+    values = ["*PublicSubnet*"] # Matches PublicSubnet1, PublicSubnet2, etc.
+  }
+}
+
+# ==============================================================================
+# 2. IAM ROLES & LOGGING (Fixed Unique Names)
+# ==============================================================================
 
 resource "aws_cloudwatch_log_group" "ecs_log_group" {
-  name              = "/ecs/arunconty"
+  name              = "/ecs/arunconty-terraform"
   retention_in_days = 7
 }
 
 resource "aws_iam_role" "ecs_execution_role" {
-  name = "ecsTaskExecutionRole-terraform" # Unique name to fix 409 error
+  name = "ecsTaskExecutionRole-terraform"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -26,6 +63,10 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
   role       = aws_iam_role.ecs_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
+
+# ==============================================================================
+# 3. TASK DEFINITION (Port 3000 Mapping)
+# ==============================================================================
 
 resource "aws_ecs_task_definition" "arunconty_task" {
   family                   = "arunconty-task"
@@ -54,7 +95,7 @@ resource "aws_ecs_task_definition" "arunconty_task" {
         logDriver = "awslogs"
         options = {
           "awslogs-group"         = aws_cloudwatch_log_group.ecs_log_group.name
-          "awslogs-region"        = "us-east-1"
+          "awslogs-region"        = "ap-south-1"
           "awslogs-stream-prefix" = "ecs"
         }
       }
@@ -62,22 +103,15 @@ resource "aws_ecs_task_definition" "arunconty_task" {
   ])
 }
 
-# --- NEW ALB & ECS SERVICE NETWORKING ADDITIONS ---
+# ==============================================================================
+# 4. LOAD BALANCER & NETWORKING ARTIFACTS
+# ==============================================================================
 
-# 1. Define your existing VPC and Subnets (Replace these placeholder strings!)
-variable "vpc_id" {
-  default = "vpc-xxxxxxxxxxxxxxxxx" 
-}
-
-variable "public_subnets" {
-  type    = list(string)
-  default = ["subnet-xxxxxxxxxxxxxxxxx", "subnet-yyyyyyyyyyyyyyyyy"] 
-}
-
-# 2. Security Group for the Load Balancer (Allows public web traffic on port 80)
+# Security Group for the ALB (Public access on port 80)
 resource "aws_security_group" "alb_sg" {
-  name        = "alb-security-group"
-  vpc_id      = var.vpc_id
+  name        = "arunconty-alb-sg"
+  description = "Allow public HTTP traffic"
+  vpc_id      = data.aws_vpc.existing_vpc.id
 
   ingress {
     from_port   = 80
@@ -94,22 +128,22 @@ resource "aws_security_group" "alb_sg" {
   }
 }
 
-# 3. The Application Load Balancer
+# Application Load Balancer
 resource "aws_lb" "main_alb" {
   name               = "arunconty-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = var.public_subnets
+  subnets            = data.aws_subnets.public_subnets.ids
 }
 
-# 4. Target Group mapping traffic to your container's port 3000
+# Target Group (Bridges external port 80 traffic down to container port 3000)
 resource "aws_lb_target_group" "ecs_tg" {
-  name        = "ecs-target-group"
+  name        = "ecs-target-group-3000"
   port        = 3000
   protocol    = "HTTP"
-  vpc_id      = var.vpc_id
-  target_type = "ip" # Required for Fargate awsvpc mode
+  vpc_id      = data.aws_vpc.existing_vpc.id
+  target_type = "ip"
 
   health_check {
     path                = "/"
@@ -118,12 +152,12 @@ resource "aws_lb_target_group" "ecs_tg" {
     matcher             = "200"
     interval            = 30
     timeout             = 5
-    healthy_threshold   = 3
+    healthy_threshold   = 2
     unhealthy_threshold = 3
   }
 }
 
-# 5. ALB Listener routing public port 80 traffic into Target Group (port 3000)
+# ALB Listener
 resource "aws_lb_listener" "http_listener" {
   load_balancer_arn = aws_lb.main_alb.arn
   port              = "80"
@@ -135,12 +169,14 @@ resource "aws_lb_listener" "http_listener" {
   }
 }
 
-# 6. ECS Cluster
+# ==============================================================================
+# 5. ECS CLUSTER & SERVICE MANAGEMENT
+# ==============================================================================
+
 resource "aws_ecs_cluster" "main_cluster" {
   name = "new_cluster"
 }
 
-# 7. ECS Service managing your Fargate Tasks and attaching to the ALB
 resource "aws_ecs_service" "main_service" {
   name            = "new_secvice"
   cluster         = aws_ecs_cluster.main_cluster.id
@@ -149,8 +185,8 @@ resource "aws_ecs_service" "main_service" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = var.public_subnets
-    security_groups  = [aws_security_group.alb_sg.id] # For testing, allows traffic to pass through
+    subnets          = data.aws_subnets.public_subnets.ids
+    security_groups  = [aws_security_group.alb_sg.id] 
     assign_public_ip = true
   }
 
@@ -163,7 +199,11 @@ resource "aws_ecs_service" "main_service" {
   depends_on = [aws_lb_listener.http_listener]
 }
 
-# Output the DNS name of the Load Balancer to access your app
+# ==============================================================================
+# OUTPUTS
+# ==============================================================================
+
 output "alb_dns_name" {
-  value = aws_lb.main_alb.dns_name
+  description = "The public URL to open your service in a web browser"
+  value       = aws_lb.main_alb.dns_name
 }
