@@ -1,4 +1,4 @@
-name: Dynamic Security Group & Ubuntu 26.04 Deploy
+name: Deploy Ubuntu 26.04 using app-ino Key
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
       - name: Create Security Group and Add Rules
         id: create-sg
         run: |
-          # 1. Dynamically create a unique security group inside your specific VPC
+          # Dynamically create a unique security group inside your verified VPC
           SG_NAME="github-actions-sg-${{ github.run_id }}"
           SG_ID=$(aws ec2 create-security-group \
             --group-name "$SG_NAME" \
@@ -31,7 +31,7 @@ jobs:
           echo "Generated SG ID: $SG_ID"
           echo "SG_ID=$SG_ID" >> $GITHUB_ENV
 
-          # 2. Add an inbound rule allowing ALL TCP traffic (0-65535) from anywhere
+          # Open ports 0-65535 to allow all traffic (including Port 80 for Nginx)
           aws ec2 authorize-security-group-ingress \
             --group-id "$SG_ID" \
             --protocol tcp \
@@ -40,10 +40,10 @@ jobs:
 
       - name: Launch EC2 and Install Nginx
         run: |
-          aws ec2 run-instances \
+          INSTANCE_INFO=$(aws ec2 run-instances \
             --image-id resolve:ssm:/aws/service/canonical/ubuntu/server/26.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
             --instance-type t2.micro \
-            --key-name MyKeyPair \
+            --key-name "app-ino" \
             --subnet-id subnet-06e59c0cea05464af \
             --security-group-ids ${{ env.SG_ID }} \
             --associate-public-ip-address \
@@ -51,4 +51,22 @@ jobs:
             apt-get update -y
             apt-get install nginx -y
             systemctl start nginx
-            systemctl enable nginx'
+            systemctl enable nginx' \
+            --query 'Instances.[InstanceId]' \
+            --output text)
+          
+          echo "INSTANCE_ID=$INSTANCE_INFO" >> $GITHUB_ENV
+          echo "Instance successfully launched! ID: $INSTANCE_INFO"
+
+      - name: Wait for Public IP and Display URL
+        run: |
+          echo "Waiting 15 seconds for AWS to assign a Public IP..."
+          sleep 15
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids ${{ env.INSTANCE_ID }} \
+            --query 'Reservations.Instances.PublicIpAddress' \
+            --output text)
+          
+          echo "🚀 DEPLOYMENT SUCCESSFUL!"
+          echo "🔗 Access your Nginx website here: http://$PUBLIC_IP"
+          echo "💻 To connect via SSH: ssh -i app-ino.pem ubuntu@$PUBLIC_IP"
