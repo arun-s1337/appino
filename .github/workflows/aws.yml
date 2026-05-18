@@ -6,9 +6,9 @@ on:
 
 env:
   AWS_REGION: us-east-1                  
-  ECS_CLUSTER: new_cluster               # The script will auto-create this if it is missing
-  ECS_SERVICE: new_secvice               # Your Amazon ECS service name
-  ECS_TASK_DEFINITION: task-definition.json 
+  ECS_CLUSTER: new_cluster               
+  ECS_SERVICE: new_secvice               
+  ECS_TASK_DEFINITION: task-definition.json # Looks for this file in your root folder
   CONTAINER_NAME: arunconty               
   IMAGE_NAME: arun586/service_1:latest   
 
@@ -32,20 +32,13 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
 
-    # Automatically checks and creates the cluster if it doesn't exist
     - name: Create ECS Cluster if missing
       run: |
-        echo "Checking if ECS cluster ${{ env.ECS_CLUSTER }} exists..."
         CLUSTER_EXISTS=$(aws ecs list-clusters --query "clusterArns[?contains(@, '${{ env.ECS_CLUSTER }}')]" --output text)
-        
         if [ -z "$CLUSTER_EXISTS" ]; then
-          echo "Cluster not found. Creating new ECS Cluster: ${{ env.ECS_CLUSTER }}..."
           aws ecs create-cluster --cluster-name ${{ env.ECS_CLUSTER }}
-        else
-          echo "ECS Cluster ${{ env.ECS_CLUSTER }} already exists."
         fi
 
-    # Swaps out the placeholder image string inside your task-definition.json
     - name: Fill in the new image ID in the Amazon ECS task definition
       id: task-def
       uses: aws-actions/amazon-ecs-render-task-definition@v1
@@ -54,7 +47,6 @@ jobs:
         container-name: ${{ env.CONTAINER_NAME }}
         image: ${{ env.IMAGE_NAME }}
 
-    # Deploys to your ECS Service and monitors stability
     - name: Deploy Amazon ECS task definition
       uses: aws-actions/amazon-ecs-deploy-task-definition@v1
       with:
