@@ -1,4 +1,4 @@
-name: Deploy to Amazon ECS
+name: Terraform Apply and ECS Deploy
 
 on:
   push:
@@ -8,49 +8,48 @@ env:
   AWS_REGION: us-east-1                  
   ECS_CLUSTER: new_cluster               
   ECS_SERVICE: new_secvice               
-  ECS_TASK_DEFINITION: task-definition.json # Looks for this file in your root folder
-  CONTAINER_NAME: arunconty               
-  IMAGE_NAME: arun586/service_1:latest   
 
 permissions:
   contents: read
 
 jobs:
-  deploy:
-    name: Deploy
+  terraform-and-deploy:
+    name: Terraform & Deploy
     runs-on: ubuntu-latest
     environment: production
 
     steps:
-    - name: Checkout
+    - name: Checkout Code
       uses: actions/checkout@v4
 
+    # 1. Setup AWS Credentials
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
+      uses: aws-actions/configure-aws-credentials@v2
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
 
-    - name: Create ECS Cluster if missing
-      run: |
-        CLUSTER_EXISTS=$(aws ecs list-clusters --query "clusterArns[?contains(@, '${{ env.ECS_CLUSTER }}')]" --output text)
-        if [ -z "$CLUSTER_EXISTS" ]; then
-          aws ecs create-cluster --cluster-name ${{ env.ECS_CLUSTER }}
-        fi
-
-    - name: Fill in the new image ID in the Amazon ECS task definition
-      id: task-def
-      uses: aws-actions/amazon-ecs-render-task-definition@v1
+    # 2. Install the specified version of Terraform CLI
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
       with:
-        task-definition: ${{ env.ECS_TASK_DEFINITION }}
-        container-name: ${{ env.CONTAINER_NAME }}
-        image: ${{ env.IMAGE_NAME }}
+        terraform_version: 1.5.0 # Change this to match your local terraform version if needed
 
+    # 3. Initialize Terraform (Downloads providers and modules)
+    - name: Terraform Init
+      run: terraform init
+
+    # 4. Apply Terraform changes automatically (Creates Cluster, Task Def, Roles, etc.)
+    - name: Terraform Apply
+      run: terraform apply -auto-approve
+
+    # 5. Deploy the updated Task Definition to the ECS Service
     - name: Deploy Amazon ECS task definition
-      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v2
       with:
-        task-definition: ${{ steps.task-def.outputs.task-definition }}
+        # Instead of a JSON file, we reference the family name managed by Terraform
+        task-definition: arunconty-task 
         service: ${{ env.ECS_SERVICE }}
         cluster: ${{ env.ECS_CLUSTER }}
         wait-for-service-stability: true
