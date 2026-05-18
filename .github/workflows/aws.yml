@@ -6,7 +6,7 @@ on:
 
 env:
   AWS_REGION: us-east-1                  
-  ECS_CLUSTER: new_cluster               # Auto-creates this if missing
+  ECS_CLUSTER: new_cluster               # The script will auto-create this if it is missing
   ECS_SERVICE: new_secvice               # Your Amazon ECS service name
   ECS_TASK_DEFINITION: task-definition.json 
   CONTAINER_NAME: arunconty               
@@ -32,7 +32,7 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
 
-    # Automatically creates the cluster if it doesn't exist
+    # Automatically checks and creates the cluster if it doesn't exist
     - name: Create ECS Cluster if missing
       run: |
         echo "Checking if ECS cluster ${{ env.ECS_CLUSTER }} exists..."
@@ -45,7 +45,7 @@ jobs:
           echo "ECS Cluster ${{ env.ECS_CLUSTER }} already exists."
         fi
 
-    # Renders the task definition using the JSON file from your repository
+    # Swaps out the placeholder image string inside your task-definition.json
     - name: Fill in the new image ID in the Amazon ECS task definition
       id: task-def
       uses: aws-actions/amazon-ecs-render-task-definition@v1
