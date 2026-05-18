@@ -15,16 +15,16 @@ provider "aws" {
   region = "ap-south-1" 
 }
 
-# Generates a short random string to guarantee unique IAM resource names
+# Generates a fresh unique string on every unique execution structure
 resource "random_pet" "suffix" {
   length = 1
 }
 
 # ==============================================================================
-# 1. NETWORK LOOKUPS (Fixed to capture multiple availability zones)
+# 1. NETWORK LOOKUPS (Targeting your specific infrastructure)
 # ==============================================================================
 
-# Finds your existing VPC based on its tag name
+# Finds your existing VPC based on its template tag name
 data "aws_vpc" "existing_vpc" {
   filter {
     name   = "tag:Name"
@@ -32,32 +32,30 @@ data "aws_vpc" "existing_vpc" {
   }
 }
 
-# Dynamically grabs all public subnets inside your VPC to satisfy the 2-AZ requirement
+# Dynamically gathers all public subnets created by that template across your AZs
 data "aws_subnets" "public_subnets" {
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.existing_vpc.id]
   }
 
-  # This looks for any subnet with "Public" in its Name tag or properties
   filter {
     name   = "tag:Name"
-    values = ["*Public*", "*public*"] 
+    values = ["CodePipelineStarterTemplate-DeployToECSFargate-1jJEBszQ/SimpleDockerEcsCluster-0262a13086f3/Vpc/PublicSubnet*"] 
   }
 }
 
 # ==============================================================================
-# 2. IAM ROLES & LOGGING (Now dynamically named with a random suffix)
+# 2. IAM ROLES & LOGGING (Now fully dynamic to prevent duplicate errors)
 # ==============================================================================
 
 resource "aws_cloudwatch_log_group" "ecs_log_group" {
-  name              = "/ecs/arunconty-terraform"
+  name              = "/ecs/arunconty-tf-${random_pet.suffix.id}"
   retention_in_days = 7
 }
 
 resource "aws_iam_role" "ecs_execution_role" {
-  # Combines your name with a random string (e.g., ecsTaskExecutionRole-terraform-wolf)
-  name = "ecsTaskExecutionRole-terraform-${random_pet.suffix.id}"
+  name = "ecsExecutionRole-tf-${random_pet.suffix.id}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -75,7 +73,7 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
 }
 
 # ==============================================================================
-# 3. TASK DEFINITION (Port 3000 Mapping)
+# 3. TASK DEFINITION (Port 3000 Matrix)
 # ==============================================================================
 
 resource "aws_ecs_task_definition" "arunconty_task" {
@@ -114,10 +112,9 @@ resource "aws_ecs_task_definition" "arunconty_task" {
 }
 
 # ==============================================================================
-# 4. LOAD BALANCER & NETWORKING ARTIFACTS
+# 4. LOAD BALANCER & NETWORKING ARTIFACTS (Isolated Unique Naming)
 # ==============================================================================
 
-# Security Group for the ALB (Public access on port 80)
 resource "aws_security_group" "alb_sg" {
   name        = "arunconty-alb-sg-${random_pet.suffix.id}"
   description = "Allow public HTTP traffic"
@@ -138,18 +135,16 @@ resource "aws_security_group" "alb_sg" {
   }
 }
 
-# Application Load Balancer
 resource "aws_lb" "main_alb" {
-  name               = "arunconty-alb"
+  name               = "arunconty-alb-${random_pet.suffix.id}"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
   subnets            = data.aws_subnets.public_subnets.ids
 }
 
-# Target Group (Bridges external port 80 traffic down to container port 3000)
 resource "aws_lb_target_group" "ecs_tg" {
-  name        = "ecs-target-group-3000"
+  name        = "tg-3000-${random_pet.suffix.id}" # Dynamically unique name
   port        = 3000
   protocol    = "HTTP"
   vpc_id      = data.aws_vpc.existing_vpc.id
@@ -167,7 +162,6 @@ resource "aws_lb_target_group" "ecs_tg" {
   }
 }
 
-# ALB Listener
 resource "aws_lb_listener" "http_listener" {
   load_balancer_arn = aws_lb.main_alb.arn
   port              = "80"
@@ -214,6 +208,6 @@ resource "aws_ecs_service" "main_service" {
 # ==============================================================================
 
 output "alb_dns_name" {
-  description = "The public URL to open your service in a web browser"
+  description = "Open this link in your browser to check your running web application!"
   value       = aws_lb.main_alb.dns_name
 }
