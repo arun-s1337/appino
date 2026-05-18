@@ -1,21 +1,42 @@
-name: Deploy Ubuntu 26.04 with Nginx
+name: Dynamic Security Group & Ubuntu 26.04 Deploy
 
 on:
   workflow_dispatch:
 
 jobs:
-  launch-instance:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: Authenticate with AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1 # Change to your target region
+          aws-region: us-east-1
+
+      - name: Create Security Group and Add Rules
+        id: create-sg
+        run: |
+          # 1. Dynamically create a unique security group inside your specific VPC
+          SG_NAME="github-actions-sg-${{ github.run_id }}"
+          SG_ID=$(aws ec2 create-security-group \
+            --group-name "$SG_NAME" \
+            --description "Created via GitHub Actions to allow all TCP" \
+            --vpc-id vpc-022a26196a0f835e1 \
+            --query 'GroupId' --output text)
+          
+          echo "Generated SG ID: $SG_ID"
+          echo "SG_ID=$SG_ID" >> $GITHUB_ENV
+
+          # 2. Add an inbound rule allowing ALL TCP traffic (0-65535) from anywhere
+          aws ec2 authorize-security-group-ingress \
+            --group-id "$SG_ID" \
+            --protocol tcp \
+            --port 0-65535 \
+            --cidr 0.0.0.0/0
 
       - name: Launch EC2 and Install Nginx
         run: |
@@ -23,8 +44,9 @@ jobs:
             --image-id resolve:ssm:/aws/service/canonical/ubuntu/server/26.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
             --instance-type t2.micro \
             --key-name MyKeyPair \
-            --security-group-ids sg-0123456789abcdef0 \
-            --subnet-id subnet-0123456789abcdef0 \
+            --subnet-id subnet-06e59c0cea05464af \
+            --security-group-ids ${{ env.SG_ID }} \
+            --associate-public-ip-address \
             --user-data '#!/bin/bash
             apt-get update -y
             apt-get install nginx -y
