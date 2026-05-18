@@ -20,7 +20,6 @@ jobs:
       - name: Create Security Group and Add Rules
         id: create-sg
         run: |
-          # Dynamically create a unique security group inside your verified VPC
           SG_NAME="github-actions-sg-${{ github.run_id }}"
           SG_ID=$(aws ec2 create-security-group \
             --group-name "$SG_NAME" \
@@ -31,7 +30,6 @@ jobs:
           echo "Generated SG ID: $SG_ID"
           echo "SG_ID=$SG_ID" >> $GITHUB_ENV
 
-          # Open ports 0-65535 to allow all traffic (including Port 80 for Nginx)
           aws ec2 authorize-security-group-ingress \
             --group-id "$SG_ID" \
             --protocol tcp \
@@ -39,8 +37,10 @@ jobs:
             --cidr 0.0.0.0/0
 
       - name: Launch EC2 and Install Nginx
+        id: ec2-run
         run: |
-          INSTANCE_INFO=$(aws ec2 run-instances \
+          # 1. Run the command without filters so we can see error messages if it fails
+          RAW_OUTPUT=$(aws ec2 run-instances \
             --image-id resolve:ssm:/aws/service/canonical/ubuntu/server/26.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
             --instance-type t2.micro \
             --key-name "app-ino" \
@@ -51,20 +51,29 @@ jobs:
             apt-get update -y
             apt-get install nginx -y
             systemctl start nginx
-            systemctl enable nginx' \
-            --query 'Instances.[InstanceId]' \
-            --output text)
+            systemctl enable nginx')
+
+          # 2. Parse out the Instance ID manually using jq
+          INSTANCE_ID=$(echo "$RAW_OUTPUT" | jq -r '.Instances[0].InstanceId')
           
-          echo "INSTANCE_ID=$INSTANCE_INFO" >> $GITHUB_ENV
-          echo "Instance successfully launched! ID: $INSTANCE_INFO"
+          # 3. Fail explicitly if the ID is missing or broken
+          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "null" ]; then
+            echo "❌ ERROR: AWS failed to create the instance! Raw response below:"
+            echo "$RAW_OUTPUT"
+            exit 1
+          fi
+
+          echo "Instance successfully launched! ID: $INSTANCE_ID"
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
 
       - name: Wait for Public IP and Display URL
         run: |
           echo "Waiting 15 seconds for AWS to assign a Public IP..."
           sleep 15
+          
           PUBLIC_IP=$(aws ec2 describe-instances \
             --instance-ids ${{ env.INSTANCE_ID }} \
-            --query 'Reservations.Instances.PublicIpAddress' \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
             --output text)
           
           echo "🚀 DEPLOYMENT SUCCESSFUL!"
