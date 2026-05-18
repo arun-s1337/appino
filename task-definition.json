@@ -9,7 +9,7 @@
             "portMappings": [
                 {
                     "containerPort": 3000,
-                    "hostPort": 300,
+                    "hostPort": 3000,
                     "protocol": "tcp"
                 }
             ],
@@ -27,6 +27,7 @@
             }
         }
     ],
+    "executionRoleArn": "arn:aws:iam::112233445566:role/ecsTaskExecutionRole",
     "requiresCompatibilities": [
         "FARGATE"
     ],
